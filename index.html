@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>일일 업무 일지 (클라우드 연동)</title>
+    <!-- PDF, Excel 등 외부 라이브러리 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    
+    <!-- 🔥 Firebase 연동 라이브러리 추가 -->
+    <script src="https://www.gstatic.com/firebasejs/10.1.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.1.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; background-color: #f4f4f9; }
+        .sidebar { width: 300px; background-color: #333; color: white; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; box-sizing: border-box; }
+        .sidebar h2 { font-size: 18px; margin-bottom: 20px; text-align: center; }
+        .filter-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .filter-group select { flex: 1; padding: 5px; font-size: 14px; }
+        .manager-filter { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 15px; padding-bottom: 15px; border-bottom: 1px solid #555; }
+        .manager-btn { padding: 6px 12px; background-color: #555; color: white; border: 1px solid #777; border-radius: 20px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+        .manager-btn:hover { background-color: #666; }
+        .manager-btn.active { background-color: #28a745; border-color: #28a745; font-weight: bold; }
+        .excel-export-btn { padding: 10px; background-color: #217346; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; font-weight: bold; font-size: 14px; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .excel-export-btn:hover { background-color: #1e6b40; }
+        .log-list { list-style: none; padding: 0; margin: 0; flex: 1; }
+        .log-list li { background: #444; margin-bottom: 10px; padding: 10px; border-radius: 4px; transition: background 0.2s; font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .log-list li:hover { background: #555; }
+        .log-info { display: flex; justify-content: space-between; cursor: pointer; align-items: center; }
+        .log-info span.mgr-badge { background: #17a2b8; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+        .log-actions { display: flex; justify-content: flex-end; gap: 5px; }
+        .log-actions button { padding: 3px 8px; font-size: 11px; font-weight: bold; cursor: pointer; border: none; border-radius: 3px; }
+        .log-actions .copy-btn { background-color: #ffc107; color: #000; }
+        .log-actions .copy-btn:hover { background-color: #e0a800; }
+        .log-actions .del-btn { background-color: #dc3545; color: white; }
+        .log-actions .del-btn:hover { background-color: #c82333; }
+        .new-btn { padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 20px; font-weight: bold; font-size: 15px; }
+        .new-btn:hover { background-color: #0056b3; }
+        .main-content { flex: 1; padding: 40px; overflow-y: auto; background-color: #fff; box-sizing: border-box; }
+        .report-container { max-width: 985px; padding-right: 35px; margin: 0 auto; background-color: #fff; box-sizing: border-box; }
+        table { width: 100%; border-collapse: collapse; border: 2px solid #000; table-layout: fixed; }
+        th, td { border: 1px solid #000; padding: 1px 3px; text-align: center; vertical-align: middle; font-size: 14px; }
+        .bg-blue { background-color: #dbe5f1; font-weight: bold; }
+        .bg-gray { background-color: #e6e6e6; font-weight: bold; }
+        input[type="text"]:not(.cell-input) { width: 95%; height: 18px; border: none; background: transparent; font-family: inherit; font-size: 14px; outline: none; text-align: center; }
+        .split-td { padding: 0 !important; height: 1px; position: relative; }
+        .cell-group { display: flex; flex-direction: column; width: 100%; height: 100%; }
+        textarea.cell-input { flex: 1; width: 100%; min-height: 20px; border: none; border-bottom: 1px solid #000; box-sizing: border-box; background: transparent; font-family: inherit; font-size: 14px; text-align: left; padding: 1px 4px; outline: none; margin: 0; resize: none; overflow: hidden; line-height: 1.2; }
+        textarea.cell-input:last-child { border-bottom: none; }
+        textarea.free-text { width: 95%; min-height: 60px; border: none; background: transparent; font-family: inherit; font-size: 14px; resize: vertical; outline: none; vertical-align: middle; padding: 2px 0; line-height: 1.2; }
+        .date-container { display: flex; align-items: center; gap: 15px; }
+        .date-container input[type="date"] { font-family: inherit; font-size: 15px; padding: 1px; cursor: pointer; }
+        .date-container span.display-date { font-weight: bold; color: #333; font-size: 15px; }
+        .row-del-btn { position: absolute; right: -28px; top: 50%; transform: translateY(-50%); background: none; border: none; color: #dc3545; font-size: 14px; cursor: pointer; padding: 5px; opacity: 0.2; transition: opacity 0.2s; display: none; }
+        tr:hover .row-del-btn { display: inline-block; } 
+        .row-del-btn:hover { opacity: 1; }
+        .ctrl-btns { display: flex; justify-content: center; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
+        .ctrl-btn { padding: 2px 4px; color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 10px; font-weight: bold; }
+        .btn-add { background-color: #17a2b8; } .btn-add:hover { background-color: #117a8b; }
+        .btn-del { background-color: #dc3545; } .btn-del:hover { background-color: #c82333; }
+        .btn-reset { background-color: #6c757d; } .btn-reset:hover { background-color: #5a6268; }
+        .sign-cell { cursor: pointer; position: relative; }
+        .stamp-wrap { display: flex; justify-content: center; align-items: center; width: 100%; height: 100%; }
+        .stamp { display: inline-block; width: 44px; height: 44px; border: 3px solid #dc3545; border-radius: 50%; color: #dc3545; font-size: 15px; font-weight: 900; line-height: 44px; text-align: center; opacity: 0.85; transform: rotate(-15deg); user-select: none; pointer-events: none; }
+        .approval-table { width: 100%; height: 100%; border-collapse: collapse; border: none; }
+        .approval-table th, .approval-table td { border: 1px solid #000; }
+        .approval-table th:first-child, .approval-table td:first-child { border-left: none; }
+        .approval-table th:last-child, .approval-table td:last-child { border-right: none; }
+        .approval-table tr:first-child th { border-top: none; }
+        .approval-table tr:last-child td { border-bottom: none; }
+        .action-buttons { text-align: right; margin-top: 20px; }
+        .action-buttons button { padding: 10px 20px; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 15px; margin-left: 10px; }
+        .btn-save-main { background-color: #28a745; } .btn-save-main:hover { background-color: #218838; }
+        .btn-pdf-main { background-color: #dc3545; } .btn-pdf-main:hover { background-color: #c82333; }
+        .btn-print-main { background-color: #6c757d; } .btn-print-main:hover { background-color: #5a6268; }
+
+        @media print {
+            body { background-color: #fff; }
+            .sidebar { display: none !important; }
+            .main-content { padding: 0 !important; margin: 0 !important; width: 100% !important; }
+            .ctrl-btns, .ctrl-btn, .row-del-btn, .action-buttons, .date-container input[type="date"] { display: none !important; }
+            input[type="text"], textarea { color: #000 !important; }
+            @page { size: A4 portrait; margin: 15mm; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>업무일지 기록</h2>
+        <button class="new-btn" onclick="createNew()">+ 새 업무일지 작성</button>
+        
+        <div class="filter-group">
+            <select id="year-filter" onchange="resetFilterAndRender()"></select>
+            <select id="month-filter" onchange="resetFilterAndRender()">
+                <option value="01">1월</option><option value="02">2월</option><option value="03">3월</option>
+                <option value="04">4월</option><option value="05">5월</option><option value="06">6월</option>
+                <option value="07">7월</option><option value="08">8월</option><option value="09">9월</option>
+                <option value="10">10월</option><option value="11">11월</option><option value="12">12월</option>
+            </select>
+        </div>
+
+        <div class="manager-filter" id="manager-filter-container"></div>
+        
+        <button class="excel-export-btn" onclick="exportToExcel()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+            월별 엑셀 다운로드 (.xlsx)
+        </button>
+
+        <ul class="log-list" id="log-list"></ul>
+    </div>
+
+    <div class="main-content">
+        <div class="report-container" id="report-container">
+            <form id="report-form">
+                <table>
+                    <colgroup>
+                        <col style="width: 10%;"><col style="width: 8%;"> <col style="width: 15%;">
+                        <col style="width: 37%;"><col style="width: 10%;"><col style="width: 20%;">
+                    </colgroup>
+                    
+                    <tr>
+                        <td colspan="4" rowspan="2" class="bg-blue" style="font-size: 32px; letter-spacing: 15px; padding: 10px 0;">일일업무일지</td>
+                        <td rowspan="2" class="bg-gray" style="width: 30px;">결<br><br><br>재</td>
+                        <td style="padding: 0;">
+                            <table class="approval-table">
+                                <tr>
+                                    <th class="bg-gray">담당자</th>
+                                    <th class="bg-gray">부서장</th>
+                                </tr>
+                                <tr>
+                                    <td style="height: 60px;" class="sign-cell" id="sign-manager" onclick="toggleStamp(this)" title="클릭 시 확인 도장 표시"></td>
+                                    <td class="sign-cell" id="sign-director" onclick="toggleStamp(this)" title="클릭 시 확인 도장 표시"></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr></tr>
+
+                    <tr>
+                        <td class="bg-gray">소 속</td>
+                        <td colspan="3"><input type="text" id="dept" value="신규사업부"></td>
+                        <td class="bg-gray">담당자</td>
+                        <td><input type="text" id="manager" placeholder="이름 입력 (필수)"></td>
+                    </tr>
+                    <tr>
+                        <td class="bg-gray">날 자</td>
+                        <td colspan="5" style="text-align: left; padding-left: 10px;">
+                            <div class="date-container">
+                                <input type="date" id="report-date" required onchange="updateDateDisplay()">
+                                <span class="display-date" id="display-date-text"></span>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td colspan="2" class="bg-gray">분 류</td>
+                        <td class="bg-gray">프로젝트명</td>
+                        <td class="bg-gray">목 표</td>
+                        <td colspan="2" class="bg-gray">비 고/지연 사유</td>
+                    </tr>
+                    <tr id="main-row-1">
+                        <td colspan="2" id="rs-main" class="bg-gray">
+                            주요 일정
+                            <div class="ctrl-btns">
+                                <button type="button" class="ctrl-btn btn-add" onclick="addRow('main')" title="새 가로줄 추가">행+</button>
+                                <button type="button" class="ctrl-btn btn-del" onclick="removeLastRow('main')" title="마지막 가로줄 삭제">행-</button>
+                                <button type="button" class="ctrl-btn btn-reset" onclick="clearSection('main')" title="내용 초기화">↺</button>
+                            </div>
+                        </td>
+                        <td class="split-td"><div class="main-proj-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td class="split-td"><div class="main-col1-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td colspan="2" class="split-td">
+                            <div class="main-col2-group cell-group"><textarea class="cell-input"></textarea></div>
+                            <button type="button" class="row-del-btn" onclick="deleteSpecificRow(this, 'main')" title="이 행 삭제">❌</button>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td colspan="6" class="bg-blue" style="text-align: left; padding-left: 10px;">1. 일일 업무 실시 현황</td>
+                    </tr>
+                    <tr>
+                        <td colspan="2" class="bg-gray">분 류</td>
+                        <td class="bg-gray">프로젝트명</td>
+                        <td class="bg-gray">목 표</td>
+                        <td colspan="2" class="bg-gray">비 고</td>
+                    </tr>
+
+                    <tr id="am-row-1">
+                        <td id="rs-today" class="bg-gray">금일<br>업무 현황</td>
+                        <td id="rs-am" class="bg-gray">
+                            오 전
+                            <div class="ctrl-btns">
+                                <button type="button" class="ctrl-btn btn-add" onclick="addRow('am')">행+</button>
+                                <button type="button" class="ctrl-btn btn-del" onclick="removeLastRow('am')">행-</button>
+                                <button type="button" class="ctrl-btn btn-reset" onclick="clearSection('am')">↺</button>
+                            </div>
+                        </td>
+                        <td class="split-td"><div class="am-proj-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td class="split-td"><div class="am-col1-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td colspan="2" class="split-td">
+                            <div class="am-col2-group cell-group"><textarea class="cell-input"></textarea></div>
+                            <button type="button" class="row-del-btn" onclick="deleteSpecificRow(this, 'am')" title="이 행 삭제">❌</button>
+                        </td>
+                    </tr>
+                    
+                    <tr id="pm-row-1">
+                        <td id="rs-pm" class="bg-gray">
+                            오 후
+                            <div class="ctrl-btns">
+                                <button type="button" class="ctrl-btn btn-add" onclick="addRow('pm')">행+</button>
+                                <button type="button" class="ctrl-btn btn-del" onclick="removeLastRow('pm')">행-</button>
+                                <button type="button" class="ctrl-btn btn-reset" onclick="clearSection('pm')">↺</button>
+                            </div>
+                        </td>
+                        <td class="split-td"><div class="pm-proj-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td class="split-td"><div class="pm-col1-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td colspan="2" class="split-td">
+                            <div class="pm-col2-group cell-group"><textarea class="cell-input"></textarea></div>
+                            <button type="button" class="row-del-btn" onclick="deleteSpecificRow(this, 'pm')" title="이 행 삭제">❌</button>
+                        </td>
+                    </tr>
+
+                    <tr id="next-row-1">
+                        <td colspan="2" id="rs-next" class="bg-gray">
+                            익일 예정사항
+                            <div class="ctrl-btns">
+                                <button type="button" class="ctrl-btn btn-add" onclick="addRow('next')">행+</button>
+                                <button type="button" class="ctrl-btn btn-del" onclick="removeLastRow('next')">행-</button>
+                                <button type="button" class="ctrl-btn btn-reset" onclick="clearSection('next')">↺</button>
+                            </div>
+                        </td>
+                        <td class="split-td"><div class="next-proj-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td class="split-td"><div class="next-col1-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                        <td colspan="2" class="split-td">
+                            <div class="next-col2-group cell-group"><textarea class="cell-input"></textarea></div>
+                            <button type="button" class="row-del-btn" onclick="deleteSpecificRow(this, 'next')" title="이 행 삭제">❌</button>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td colspan="6" class="bg-blue" style="text-align: left; padding: 0 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                                <span>2. 특이 사항</span>
+                                <button type="button" class="ctrl-btn btn-reset" onclick="clearSection('special')" style="padding: 2px 8px;">내용 초기화 ↺</button>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="4" class="bg-gray">내 용</td>
+                        <td colspan="2" class="bg-gray">비 고</td>
+                    </tr>
+                    <tr>
+                        <td colspan="4"><textarea id="special-content" class="free-text"></textarea></td>
+                        <td colspan="2"><textarea id="special-note" class="free-text"></textarea></td>
+                    </tr>
+                </table>
+            </form>
+            
+            <div class="action-buttons" id="action-buttons">
+                <button type="button" class="btn-print-main" onclick="printReport()">🖨️ PRINT</button>
+                <button type="button" class="btn-pdf-main" onclick="savePDF()">📄 PDF 다운로드</button>
+                <button type="button" class="btn-save-main" onclick="saveLog()">💾 클라우드 저장 (Ctrl+S)</button>
+            </div>
+            
+            <p style="text-align: right; color: #555; font-size: 13px; margin-top: 15px; line-height: 1.6;">
+                💡 <b>결재란 안내</b> | 결재 셀을 <b>클릭</b>하면 [확인] 도장이 찍힙니다.<br>
+                💡 <b>단축키 안내</b> | 저장: <kbd>Ctrl+S</kbd> | 행 추가: <kbd>Ctrl+Enter</kbd> | 분할: <kbd>Alt+Enter</kbd> | 병합: <kbd>Alt+Backspace</kbd>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================================
+        // 🔥 사용자의 Firebase 초기화
+        // ==========================================================
+        const firebaseConfig = {
+	 apiKey: "AIzaSyDnL8B7pWGJLbMazWThjbqgB3WZvLugwTA",
+	  authDomain: "daily-work-log-fcf46.firebaseapp.com",
+	  projectId: "daily-work-log-fcf46",
+	  storageBucket: "daily-work-log-fcf46.firebasestorage.app",
+	  messagingSenderId: "341327751150",
+	  appId: "1:341327751150:web:fd7f0c6bcac20ed823d0ff"
+        };
+        
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        // ==========================================================
+
+        let currentManagerFilter = '전체';
+
+        window.onload = function() {
+            const yearFilter = document.getElementById('year-filter');
+            const currentYear = new Date().getFullYear();
+            for (let i = currentYear - 2; i <= currentYear + 2; i++) {
+                let option = document.createElement('option');
+                option.value = i; option.text = i + '년';
+                if(i === currentYear) option.selected = true;
+                yearFilter.appendChild(option);
+            }
+            const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
+            document.getElementById('month-filter').value = currentMonth;
+
+            createNew(); 
+            renderList(); // Firebase에서 목록 불러옴
+        };
+
+        function toggleStamp(el) {
+            if (el.innerHTML.includes('stamp')) {
+                el.innerHTML = '';
+            } else {
+                el.innerHTML = '<div class="stamp-wrap"><span class="stamp">확인</span></div>';
+            }
+        }
+
+        function autoResizeTextarea(el) {
+            const group = el.closest('.cell-group');
+            let siblingEl = null;
+
+            if (group) {
+                const isCol1 = group.className.includes('-col1-group');
+                const isCol2 = group.className.includes('-col2-group');
+                if (isCol1 || isCol2) {
+                    const tr = el.closest('tr');
+                    const prefix = group.className.match(/(main|am|pm|next)-/)[1];
+                    const targetClass = isCol1 ? `.${prefix}-col2-group` : `.${prefix}-col1-group`;
+                    const siblingGroup = tr.querySelector(targetClass);
+                    if (siblingGroup) {
+                        const index = Array.from(group.children).indexOf(el);
+                        siblingEl = siblingGroup.children[index];
+                    }
+                }
+            }
+
+            el.style.flex = 'none';      
+            el.style.minHeight = '20px'; 
+            el.style.height = '20px';    
+            let requiredHeight = el.scrollHeight; 
+            
+            if (siblingEl) {
+                siblingEl.style.flex = 'none';
+                siblingEl.style.minHeight = '20px';
+                siblingEl.style.height = '20px';
+                requiredHeight = Math.max(requiredHeight, siblingEl.scrollHeight);
+            }
+
+            el.style.flex = '';          
+            el.style.height = '';        
+            el.style.minHeight = requiredHeight + 'px'; 
+            
+            if (siblingEl) {
+                siblingEl.style.flex = '';
+                siblingEl.style.height = '';
+                siblingEl.style.minHeight = requiredHeight + 'px';
+            }
+        }
+
+        document.addEventListener('input', function(e) {
+            if (e.target.classList.contains('cell-input')) autoResizeTextarea(e.target);
+        });
+
+        function deleteSpecificRow(btn, section) {
+            const tr = btn.closest('tr');
+            if (tr.id === `${section}-row-1`) {
+                alert("영역의 첫 번째 줄(기본 행)은 삭제할 수 없습니다."); return;
+            }
+            if (confirm("선택한 행을 삭제하시겠습니까?")) {
+                tr.remove();
+                if (section === 'main') document.getElementById('rs-main').rowSpan -= 1;
+                else if (section === 'am') { document.getElementById('rs-am').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                else if (section === 'pm') { document.getElementById('rs-pm').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                else if (section === 'next') document.getElementById('rs-next').rowSpan -= 1;
+            }
+        }
+
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+                e.preventDefault(); saveLog(); return;
+            }
+
+            const target = e.target;
+            if (target.classList.contains('cell-input')) {
+                if (e.ctrlKey && e.key === 'Enter') {
+                    e.preventDefault();
+                    let section = '';
+                    if (target.closest('.main-proj-group, .main-col1-group, .main-col2-group')) section = 'main';
+                    else if (target.closest('.am-proj-group, .am-col1-group, .am-col2-group')) section = 'am';
+                    else if (target.closest('.pm-proj-group, .pm-col1-group, .pm-col2-group')) section = 'pm';
+                    else if (target.closest('.next-proj-group, .next-col1-group, .next-col2-group')) section = 'next';
+                    
+                    if (section) {
+                        addRow(section);
+                        const newInputs = document.querySelectorAll(`.${section}-proj-group`);
+                        if(newInputs.length > 0) newInputs[newInputs.length - 1].querySelector('.cell-input').focus();
+                    }
+                }
+                else if (e.ctrlKey && e.key === 'Delete') {
+                    e.preventDefault();
+                    let section = '';
+                    if (target.closest('.main-proj-group, .main-col1-group, .main-col2-group')) section = 'main';
+                    else if (target.closest('.am-proj-group, .am-col1-group, .am-col2-group')) section = 'am';
+                    else if (target.closest('.pm-proj-group, .pm-col1-group, .pm-col2-group')) section = 'pm';
+                    else if (target.closest('.next-proj-group, .next-col1-group, .next-col2-group')) section = 'next';
+                    
+                    if (section) {
+                        const tr = target.closest('tr');
+                        const delBtn = tr.querySelector('.row-del-btn');
+                        if(delBtn) deleteSpecificRow(delBtn, section);
+                    }
+                }
+                else if (e.altKey && e.key === 'Enter') {
+                    e.preventDefault();
+                    const group = target.closest('.cell-group');
+                    if (group) {
+                        const isCol1 = group.className.includes('-col1-group');
+                        const isCol2 = group.className.includes('-col2-group');
+                        const tr = target.closest('tr');
+                        const index = Array.from(group.children).indexOf(target);
+
+                        if (isCol1 || isCol2) {
+                            const prefix = group.className.match(/(main|am|pm|next)-/)[1];
+                            const col1Group = tr.querySelector(`.${prefix}-col1-group`);
+                            const col2Group = tr.querySelector(`.${prefix}-col2-group`);
+
+                            if (col1Group) {
+                                const newInp1 = document.createElement('textarea');
+                                newInp1.className = 'cell-input';
+                                col1Group.children[index].after(newInp1);
+                                if (isCol1) newInp1.focus();
+                            }
+                            if (col2Group) {
+                                const newInp2 = document.createElement('textarea');
+                                newInp2.className = 'cell-input';
+                                col2Group.children[index].after(newInp2);
+                                if (isCol2) newInp2.focus();
+                            }
+                        } else {
+                            const newInput = document.createElement('textarea');
+                            newInput.className = 'cell-input';
+                            target.after(newInput); 
+                            newInput.focus();
+                        }
+                    }
+                }
+                else if (e.altKey && e.key === 'Backspace') {
+                    const group = target.closest('.cell-group');
+                    if (group && group.children.length > 1) {
+                        e.preventDefault();
+                        const index = Array.from(group.children).indexOf(target);
+                        if (index === 0) return; 
+
+                        const isCol1 = group.className.includes('-col1-group');
+                        const isCol2 = group.className.includes('-col2-group');
+                        const tr = target.closest('tr');
+
+                        if (isCol1 || isCol2) {
+                            const prefix = group.className.match(/(main|am|pm|next)-/)[1];
+                            const col1Group = tr.querySelector(`.${prefix}-col1-group`);
+                            const col2Group = tr.querySelector(`.${prefix}-col2-group`);
+
+                            if (col1Group && col1Group.children.length > 1) {
+                                const curr1 = col1Group.children[index];
+                                const prev1 = col1Group.children[index - 1];
+                                if(curr1.value) prev1.value = prev1.value + (prev1.value ? '\n' : '') + curr1.value;
+                                curr1.remove();
+                                autoResizeTextarea(prev1);
+                                if (isCol1) prev1.focus();
+                            }
+                            if (col2Group && col2Group.children.length > 1) {
+                                const curr2 = col2Group.children[index];
+                                const prev2 = col2Group.children[index - 1];
+                                if(curr2.value) prev2.value = prev2.value + (prev2.value ? '\n' : '') + curr2.value;
+                                curr2.remove();
+                                autoResizeTextarea(prev2);
+                                if (isCol2) prev2.focus();
+                            }
+                        } else {
+                            const prev = target.previousElementSibling;
+                            if(target.value) prev.value = prev.value + (prev.value ? '\n' : '') + target.value;
+                            target.remove();
+                            autoResizeTextarea(prev);
+                            prev.focus();
+                        }
+                    }
+                }
+                else if (e.key === 'Backspace' && target.value === '') {
+                    const group = target.closest('.cell-group');
+                    if (group && group.children.length > 1) {
+                        e.preventDefault();
+                        const isCol1 = group.className.includes('-col1-group');
+                        const isCol2 = group.className.includes('-col2-group');
+                        const tr = target.closest('tr');
+                        const index = Array.from(group.children).indexOf(target);
+                        
+                        const prev = target.previousElementSibling;
+                        const next = target.nextElementSibling;
+
+                        if (isCol1 || isCol2) {
+                            const prefix = group.className.match(/(main|am|pm|next)-/)[1];
+                            const col1Group = tr.querySelector(`.${prefix}-col1-group`);
+                            const col2Group = tr.querySelector(`.${prefix}-col2-group`);
+                            
+                            let siblingEl = null;
+                            if (isCol1 && col2Group) siblingEl = col2Group.children[index];
+                            else if (isCol2 && col1Group) siblingEl = col1Group.children[index];
+
+                            if (siblingEl && siblingEl.value !== '') {
+                                alert("연결된 칸(목표/비고)에 내용이 있어 삭제할 수 없습니다. \n내용을 합치시려면 [Alt + Backspace]를 이용하세요.");
+                                return;
+                            }
+
+                            if (col1Group && col1Group.children.length > 1) col1Group.children[index].remove();
+                            if (col2Group && col2Group.children.length > 1) col2Group.children[index].remove();
+                            
+                            if(prev) prev.focus(); else if(next) next.focus();
+                            if(prev) autoResizeTextarea(prev); 
+                        } else {
+                            target.remove();
+                            if(prev) prev.focus(); else if(next) next.focus();
+                            if(prev) autoResizeTextarea(prev);
+                        }
+                    }
+                }
+            }
+        });
+
+        function removeLastRow(section) {
+            let rows = document.querySelectorAll(`.${section}-row, #${section}-row-1`);
+            if (rows.length > 1) {
+                if(confirm("해당 영역의 가장 마지막 가로줄(행)을 삭제하시겠습니까?")) {
+                    rows[rows.length - 1].remove();
+                    if (section === 'main') document.getElementById('rs-main').rowSpan -= 1;
+                    else if (section === 'am') { document.getElementById('rs-am').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                    else if (section === 'pm') { document.getElementById('rs-pm').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                    else if (section === 'next') document.getElementById('rs-next').rowSpan -= 1;
+                }
+            } else {
+                alert("기본 1줄은 삭제할 수 없습니다. 내용을 비우시려면 [초기화 ↺]를 이용하세요.");
+            }
+        }
+
+        function clearSection(section) {
+            if(!confirm("해당 영역의 내용을 모두 지우고 1줄로 초기화하시겠습니까?")) return;
+            
+            if(section === 'special') {
+                document.getElementById('special-content').value = '';
+                document.getElementById('special-note').value = '';
+            } else {
+                let rows = document.querySelectorAll(`.${section}-row, #${section}-row-1`);
+                for (let i = rows.length - 1; i > 0; i--) {
+                    rows[i].remove();
+                    if (section === 'main') document.getElementById('rs-main').rowSpan -= 1;
+                    else if (section === 'am') { document.getElementById('rs-am').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                    else if (section === 'pm') { document.getElementById('rs-pm').rowSpan -= 1; document.getElementById('rs-today').rowSpan -= 1; }
+                    else if (section === 'next') document.getElementById('rs-next').rowSpan -= 1;
+                }
+                let cellGroups = rows[0].querySelectorAll('.cell-group');
+                cellGroups.forEach(group => { group.innerHTML = '<textarea class="cell-input"></textarea>'; });
+            }
+        }
+
+        function updateDateDisplay() {
+            const dateInput = document.getElementById('report-date').value;
+            const displayText = document.getElementById('display-date-text');
+            if (!dateInput) { displayText.innerText = ""; return; }
+            const d = new Date(dateInput);
+            const days = ['일', '월', '화', '수', '목', '금', '토'];
+            const yyyy = d.getFullYear();
+            const mm = String(d.getMonth() + 1).padStart(2, '0');
+            const dd = String(d.getDate()).padStart(2, '0');
+            displayText.innerText = `[${yyyy}.${mm}.${dd}.${days[d.getDay()]}요일]`;
+        }
+
+        function createNew() {
+            resetTable(); 
+            document.getElementById('report-form').reset();
+            document.getElementById('dept').value = '신규사업부';
+            document.getElementById('sign-manager').innerHTML = '';
+            document.getElementById('sign-director').innerHTML = '';
+            
+            const today = new Date();
+            const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+            document.getElementById('report-date').value = todayStr;
+            updateDateDisplay();
+        }
+
+        function resetTable() {
+            document.querySelectorAll('.main-row, .am-row, .pm-row, .next-row').forEach(el => el.remove());
+            document.getElementById('rs-main').rowSpan = 1;
+            document.getElementById('rs-today').rowSpan = 2;
+            document.getElementById('rs-am').rowSpan = 1;
+            document.getElementById('rs-pm').rowSpan = 1;
+            document.getElementById('rs-next').rowSpan = 1;
+
+            document.querySelectorAll('.cell-group').forEach(group => {
+                group.innerHTML = '<textarea class="cell-input"></textarea>';
+            });
+            document.querySelectorAll('input[type="text"]:not(.cell-input), textarea.free-text').forEach(el => el.value = '');
+            
+            document.getElementById('sign-manager').innerHTML = '';
+            document.getElementById('sign-director').innerHTML = '';
+
+            for(let i=0; i<4; i++) addRow('main');
+            for(let i=0; i<9; i++) addRow('am');
+            for(let i=0; i<9; i++) addRow('pm');
+            addRow('next');
+        }
+
+        function addRow(section) {
+            let newRow = document.createElement('tr');
+            newRow.className = `${section}-row`;
+            newRow.innerHTML = `
+                <td class="split-td"><div class="${section}-proj-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                <td class="split-td"><div class="${section}-col1-group cell-group"><textarea class="cell-input"></textarea></div></td>
+                <td colspan="2" class="split-td">
+                    <div class="${section}-col2-group cell-group"><textarea class="cell-input"></textarea></div>
+                    <button type="button" class="row-del-btn" onclick="deleteSpecificRow(this, '${section}')" title="이 행 삭제">❌</button>
+                </td>
+            `;
+            let rows = document.querySelectorAll(`.${section}-row, #${section}-row-1`);
+            rows[rows.length - 1].after(newRow);
+            
+            if (section === 'main') document.getElementById('rs-main').rowSpan += 1;
+            else if (section === 'am') { document.getElementById('rs-am').rowSpan += 1; document.getElementById('rs-today').rowSpan += 1; }
+            else if (section === 'pm') { document.getElementById('rs-pm').rowSpan += 1; document.getElementById('rs-today').rowSpan += 1; }
+            else if (section === 'next') document.getElementById('rs-next').rowSpan += 1;
+        }
+
+        function getGroupValues(selector) {
+            return Array.from(document.querySelectorAll(selector)).map(group => {
+                return Array.from(group.querySelectorAll('.cell-input')).map(inp => inp.value).join('|||');
+            });
+        }
+
+        // ====== Firebase 저장 / 로드 로직 ======
+        async function saveLog() {
+            const dateStr = document.getElementById('report-date').value;
+            const managerName = document.getElementById('manager').value.trim();
+
+            if(!dateStr) { alert("날짜를 선택해주세요."); return; }
+            if(!managerName) { alert("담당자 이름을 입력해주세요."); document.getElementById('manager').focus(); return; }
+
+            const formData = {
+                date: dateStr, dept: document.getElementById('dept').value, manager: managerName,
+                mainProj: getGroupValues('.main-proj-group'), mainCol1: getGroupValues('.main-col1-group'), mainCol2: getGroupValues('.main-col2-group'),
+                amProj: getGroupValues('.am-proj-group'), amCol1: getGroupValues('.am-col1-group'), amCol2: getGroupValues('.am-col2-group'),
+                pmProj: getGroupValues('.pm-proj-group'), pmCol1: getGroupValues('.pm-col1-group'), pmCol2: getGroupValues('.pm-col2-group'),
+                nextProj: getGroupValues('.next-proj-group'), nextCol1: getGroupValues('.next-col1-group'), nextCol2: getGroupValues('.next-col2-group'),
+                specialContent: document.getElementById('special-content').value, specialNote: document.getElementById('special-note').value,
+                signManager: document.getElementById('sign-manager').innerHTML.includes('stamp'),
+                signDirector: document.getElementById('sign-director').innerHTML.includes('stamp')
+            };
+
+            const saveKey = `workLog_${dateStr}_${managerName}`;
+            
+            try {
+                await db.collection("workLogs").doc(saveKey).set(formData);
+                alert(dateStr + " (" + managerName + ") 일지가 클라우드에 안전하게 저장되었습니다.");
+                
+                const [y, m, d] = dateStr.split('-');
+                document.getElementById('year-filter').value = y;
+                document.getElementById('month-filter').value = m;
+                setManagerFilter(managerName); 
+            } catch (error) {
+                console.error("저장 오류: ", error);
+                alert("저장 중 오류가 발생했습니다. Firebase 설정을 확인해주세요.");
+            }
+        }
+
+        async function deleteLog(saveKey) {
+            if(confirm("정말 이 일지를 삭제하시겠습니까?\n(클라우드에서 완전히 삭제됩니다.)")) {
+                try {
+                    await db.collection("workLogs").doc(saveKey).delete();
+                    renderList(); 
+                } catch(error) {
+                    alert("삭제 중 오류가 발생했습니다.");
+                }
+            }
+        }
+
+        async function duplicateLog(saveKey) {
+            if(confirm("이 일지를 '오늘 날짜'로 복제하시겠습니까?")) {
+                await loadLog(saveKey); 
+                const today = new Date();
+                const todayStr = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+                document.getElementById('report-date').value = todayStr;
+                updateDateDisplay();
+                alert("내용이 복제되었습니다.\n필요한 부분을 수정한 뒤 반드시 [저장하기]를 눌러주세요.");
+            }
+        }
+
+        function resetFilterAndRender() { currentManagerFilter = '전체'; renderList(); }
+        function setManagerFilter(managerName) { currentManagerFilter = managerName; renderList(); }
+
+        async function renderList() {
+            const year = document.getElementById('year-filter').value;
+            const month = document.getElementById('month-filter').value;
+            const datePrefix = `${year}-${month}`; 
+
+            const listEl = document.getElementById('log-list');
+            const filterContainer = document.getElementById('manager-filter-container');
+            
+            listEl.innerHTML = '<li style="text-align:center; color:#ccc;">로딩 중...</li>'; 
+            filterContainer.innerHTML = '';
+
+            try {
+                const querySnapshot = await db.collection("workLogs").get();
+                let logs = []; 
+                let managersSet = new Set(); 
+
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    if(data.date && data.date.startsWith(datePrefix)) {
+                        const mgr = data.manager || "미지정";
+                        logs.push({ key: doc.id, date: data.date, manager: mgr });
+                        managersSet.add(mgr);
+                    }
+                });
+
+                logs.sort((a, b) => b.date.localeCompare(a.date));
+                listEl.innerHTML = ''; 
+
+                const btnAll = document.createElement('button');
+                btnAll.className = `manager-btn ${currentManagerFilter === '전체' ? 'active' : ''}`;
+                btnAll.innerText = '전체 보기';
+                btnAll.onclick = () => setManagerFilter('전체');
+                filterContainer.appendChild(btnAll);
+
+                managersSet.forEach(mgr => {
+                    const btn = document.createElement('button');
+                    btn.className = `manager-btn ${currentManagerFilter === mgr ? 'active' : ''}`;
+                    btn.innerText = mgr;
+                    btn.onclick = () => setManagerFilter(mgr);
+                    filterContainer.appendChild(btn);
+                });
+
+                let found = false;
+                logs.forEach(log => {
+                    if (currentManagerFilter === '전체' || currentManagerFilter === log.manager) {
+                        found = true;
+                        const li = document.createElement('li');
+                        li.innerHTML = `
+                            <div class="log-info" onclick="loadLog('${log.key}')">
+                                <span>${log.date}</span> <span class="mgr-badge">${log.manager}</span>
+                            </div>
+                            <div class="log-actions">
+                                <button class="copy-btn" onclick="event.stopPropagation(); duplicateLog('${log.key}')">복제</button>
+                                <button class="del-btn" onclick="event.stopPropagation(); deleteLog('${log.key}')">삭제</button>
+                            </div>
+                        `;
+                        listEl.appendChild(li);
+                    }
+                });
+
+                if (!found) listEl.innerHTML = '<li style="text-align:center; color:#ccc; font-size:14px; margin-top:20px; background:none;">기록 없음</li>';
+            } catch(error) {
+                console.error("데이터 로딩 에러:", error);
+                listEl.innerHTML = '<li style="text-align:center; color:#dc3545; font-size:13px;">데이터를 불러오지 못했습니다.<br>Firebase 설정을 확인하세요.</li>';
+            }
+        }
+
+        function fillSyncedGroups(group1, group2, dataStr1, dataStr2) {
+            if (!group1 || !group2) return;
+            group1.innerHTML = ''; group2.innerHTML = ''; 
+            const vals1 = dataStr1 ? dataStr1.split('|||') : [''];
+            const vals2 = dataStr2 ? dataStr2.split('|||') : [''];
+            const maxLen = Math.max(vals1.length, vals2.length);
+
+            for (let i = 0; i < maxLen; i++) {
+                let inp1 = document.createElement('textarea');
+                inp1.className = 'cell-input'; inp1.value = vals1[i] || '';
+                group1.appendChild(inp1);
+
+                let inp2 = document.createElement('textarea');
+                inp2.className = 'cell-input'; inp2.value = vals2[i] || '';
+                group2.appendChild(inp2);
+            }
+        }
+        
+        function fillGroup(groupEl, dataStr) {
+            if (!groupEl) return;
+            groupEl.innerHTML = ''; 
+            const vals = dataStr ? dataStr.split('|||') : [''];
+            vals.forEach(val => {
+                let inp = document.createElement('textarea');
+                inp.className = 'cell-input';
+                inp.value = val;
+                groupEl.appendChild(inp);
+            });
+        }
+
+        async function loadLog(saveKey) {
+            try {
+                const docSnap = await db.collection("workLogs").doc(saveKey).get();
+                if(!docSnap.exists) return;
+                
+                const data = docSnap.data();
+                resetTable(); 
+                
+                document.getElementById('report-date').value = data.date; updateDateDisplay();
+                document.getElementById('dept').value = data.dept || '신규사업부';
+                document.getElementById('manager').value = data.manager || '';
+                document.getElementById('special-content').value = data.specialContent || '';
+                document.getElementById('special-note').value = data.specialNote || '';
+                
+                document.getElementById('sign-manager').innerHTML = data.signManager ? '<div class="stamp-wrap"><span class="stamp">확인</span></div>' : '';
+                document.getElementById('sign-director').innerHTML = data.signDirector ? '<div class="stamp-wrap"><span class="stamp">확인</span></div>' : '';
+
+                populateSection('main', data.mainProj, data.mainCol1, data.mainCol2);
+                populateSection('am', data.amProj, data.amCol1, data.amCol2);
+                populateSection('pm', data.pmProj, data.pmCol1, data.pmCol2);
+                populateSection('next', data.nextProj, data.nextCol1, data.nextCol2);
+
+                setTimeout(() => {
+                    document.querySelectorAll('.cell-input').forEach(el => autoResizeTextarea(el));
+                }, 10);
+            } catch(error) {
+                alert("일지를 불러오는 중 오류가 발생했습니다.");
+            }
+        }
+
+        function populateSection(section, projData, col1Data, col2Data) {
+            if (!col1Data) return;
+            let currentRowsCount = document.querySelectorAll(`.${section}-row, #${section}-row-1`).length;
+            let targetCount = col1Data.length;
+            while (currentRowsCount < targetCount) { addRow(section); currentRowsCount++; }
+
+            let projGroups = document.querySelectorAll(`.${section}-proj-group`);
+            let col1Groups = document.querySelectorAll(`.${section}-col1-group`);
+            let col2Groups = document.querySelectorAll(`.${section}-col2-group`);
+
+            for (let i = 0; i < targetCount; i++) {
+                fillGroup(projGroups[i], projData ? projData[i] : "");
+                fillSyncedGroups(col1Groups[i], col2Groups[i], col1Data[i] || "", col2Data[i] || "");
+            }
+        }
+
+        function printReport() { window.print(); }
+
+        function savePDF() {
+            const dateStr = document.getElementById('report-date').value || '미상';
+            const managerStr = document.getElementById('manager').value || '미상';
+            const filename = `업무일지_${dateStr}_${managerStr}.pdf`;
+
+            const element = document.getElementById('report-form');
+            const ctrlBtns = document.querySelectorAll('.ctrl-btns, .btn-reset, .row-del-btn');
+            const dateIcon = document.querySelector('.date-container input[type="date"]');
+            
+            ctrlBtns.forEach(btn => btn.style.display = 'none');
+            if(dateIcon) dateIcon.style.display = 'none';
+
+            const opt = {
+                margin:       10, filename: filename,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2 },
+                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            };
+
+            html2pdf().set(opt).from(element).save().then(() => {
+                ctrlBtns.forEach(btn => btn.style.display = '');
+                if(dateIcon) dateIcon.style.display = 'inline-block';
+            });
+        }
+
+        // ===================== ExcelJS 엑셀 추출 =====================
+        async function exportToExcel() {
+            const year = document.getElementById('year-filter').value;
+            const month = document.getElementById('month-filter').value;
+            const prefix = `${year}-${month}`;
+            
+            const logsToExport = [];
+            
+            try {
+                const querySnapshot = await db.collection("workLogs").get();
+                querySnapshot.forEach(doc => {
+                    const data = doc.data();
+                    if (data.date && data.date.startsWith(prefix)) {
+                        if (currentManagerFilter === '전체' || data.manager === currentManagerFilter) {
+                            logsToExport.push(data);
+                        }
+                    }
+                });
+
+                if (logsToExport.length === 0) {
+                    alert("선택하신 월/담당자의 데이터가 없습니다.");
+                    return;
+                }
+
+                logsToExport.sort((a, b) => a.date.localeCompare(b.date));
+                const workbook = new ExcelJS.Workbook();
+                
+                const borderAll = {
+                    top: {style:'thin', color: {argb:'FF000000'}}, 
+                    left: {style:'thin', color: {argb:'FF000000'}}, 
+                    bottom: {style:'thin', color: {argb:'FF000000'}}, 
+                    right: {style:'thin', color: {argb:'FF000000'}}
+                };
+                const fontTitle = { name: '맑은 고딕', size: 22, bold: true };
+                const fontBold = { name: '맑은 고딕', size: 10, bold: true };
+                const fontDefault = { name: '맑은 고딕', size: 10 };
+                
+                const fillBlue = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBE5F1' } };
+                const fillGray = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE6E6E6' } };
+                
+                const alignCenter = { vertical: 'middle', horizontal: 'center', wrapText: true };
+                const alignLeft = { vertical: 'middle', horizontal: 'left', wrapText: true, indent: 1 };
+
+                logsToExport.forEach(data => {
+                    let sheetName = data.date.slice(5);
+                    if (currentManagerFilter === '전체') {
+                        sheetName += `(${data.manager.substring(0, 5)})`;
+                    }
+                    
+                    let finalName = sheetName;
+                    let counter = 1;
+                    while (workbook.getWorksheet(finalName)) {
+                        finalName = sheetName + '_' + counter;
+                        counter++;
+                    }
+
+                    const ws = workbook.addWorksheet(finalName);
+                    
+                    ws.columns = [
+                        { width: 7 }, { width: 7 }, { width: 15 },  
+                        { width: 45 }, { width: 5 }, { width: 14 }, { width: 14 }   
+                    ];
+
+                    let r = 1;
+
+                    ws.mergeCells(`A${r}:D${r+1}`); ws.mergeCells(`E${r}:E${r+1}`);
+                    ws.getCell(`A${r}`).value = "일  일  업  무  일  지";
+                    ws.getCell(`A${r}`).font = fontTitle; ws.getCell(`A${r}`).fill = fillBlue; ws.getCell(`A${r}`).alignment = alignCenter;
+
+                    ws.getCell(`E${r}`).value = "결\n\n재";
+                    ws.getCell(`E${r}`).font = fontBold; ws.getCell(`E${r}`).fill = fillGray; ws.getCell(`E${r}`).alignment = alignCenter;
+
+                    ws.getCell(`F${r}`).value = "담당자"; ws.getCell(`G${r}`).value = "부서장";
+                    ws.getCell(`F${r}`).font = fontBold; ws.getCell(`G${r}`).font = fontBold;
+                    ws.getCell(`F${r}`).fill = fillGray; ws.getCell(`G${r}`).fill = fillGray;
+                    ws.getCell(`F${r}`).alignment = alignCenter; ws.getCell(`G${r}`).alignment = alignCenter;
+                    r++;
+
+                    ws.getRow(r).height = 45; 
+                    ws.getCell(`F${r}`).value = data.signManager ? "확인" : "";
+                    ws.getCell(`G${r}`).value = data.signDirector ? "확인" : "";
+                    ws.getCell(`F${r}`).font = { name: '맑은 고딕', size: 14, bold: true, color: { argb: 'FFDC3545' } };
+                    ws.getCell(`G${r}`).font = { name: '맑은 고딕', size: 14, bold: true, color: { argb: 'FFDC3545' } };
+                    ws.getCell(`F${r}`).alignment = alignCenter; ws.getCell(`G${r}`).alignment = alignCenter;
+                    r++;
+
+                    ws.addRow(["소 속", data.dept, "", "", "담당자", data.manager, ""]);
+                    ws.mergeCells(`B${r}:D${r}`); ws.mergeCells(`F${r}:G${r}`);
+                    ['A','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.fill = fillGray; c.font = fontBold; c.alignment = alignCenter; });
+                    ['B','F'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.font = fontDefault; c.alignment = alignCenter; });
+                    r++;
+
+                    const days = ['일', '월', '화', '수', '목', '금', '토'];
+                    const dDate = new Date(data.date);
+                    const dateStr = `[${dDate.getFullYear()}.${String(dDate.getMonth() + 1).padStart(2, '0')}.${String(dDate.getDate()).padStart(2, '0')}.${days[dDate.getDay()]}요일]`;
+
+                    ws.addRow(["날 자", dateStr, "", "", "", "", ""]);
+                    ws.mergeCells(`B${r}:G${r}`);
+                    ws.getCell(`A${r}`).fill = fillGray; ws.getCell(`A${r}`).font = fontBold; ws.getCell(`A${r}`).alignment = alignCenter;
+                    ws.getCell(`B${r}`).font = fontBold; ws.getCell(`B${r}`).alignment = alignLeft;
+                    r++;
+
+                    ws.addRow(["분 류", "", "프로젝트명", "목 표", "비 고/지연 사유", "", ""]);
+                    ws.mergeCells(`A${r}:B${r}`); ws.mergeCells(`E${r}:G${r}`);
+                    ['A','C','D','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.fill = fillGray; c.font = fontBold; c.alignment = alignCenter; });
+                    r++;
+
+                    const parseVal = (str) => str ? str.split('|||') : [];
+                    function addRows(title1, title2, proj, col1, col2) {
+                        const startR = r;
+                        const len = Math.max(1, proj.length);
+                        for (let i = 0; i < len; i++) {
+                            const pArr = parseVal(proj[i]);
+                            const c1Arr = parseVal(col1[i]);
+                            const c2Arr = parseVal(col2[i]);
+                            const maxSplit = Math.max(1, pArr.length, c1Arr.length, c2Arr.length);
+                            
+                            for (let j = 0; j < maxSplit; j++) {
+                                const valP = pArr[j] || ""; const valC1 = c1Arr[j] || ""; const valC2 = c2Arr[j] || "";
+                                let newlines = Math.max(valP.split('\n').length, valC1.split('\n').length, valC2.split('\n').length);
+                                
+                                ws.addRow([(i===0 && j===0) ? title1 : "", (i===0 && j===0) ? title2 : "", valP, valC1, valC2, "", ""]);
+                                ws.getRow(r).height = Math.max(18, newlines * 15);
+                                ws.mergeCells(`E${r}:G${r}`);
+                                ['C','D','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.font = fontDefault; c.alignment = alignLeft; });
+                                r++;
+                            }
+                        }
+                        return { startR, endR: r - 1 };
+                    }
+
+                    let mainB = addRows("주요 일정", "", data.mainProj||[], data.mainCol1||[], data.mainCol2||[]);
+                    ws.mergeCells(`A${mainB.startR}:B${mainB.endR}`);
+                    ws.getCell(`A${mainB.startR}`).fill = fillGray; ws.getCell(`A${mainB.startR}`).font = fontBold; ws.getCell(`A${mainB.startR}`).alignment = alignCenter;
+
+                    ws.addRow(["1. 일일 업무 실시 현황", "", "", "", "", "", ""]);
+                    ws.mergeCells(`A${r}:G${r}`);
+                    ws.getCell(`A${r}`).fill = fillBlue; ws.getCell(`A${r}`).font = fontBold; ws.getCell(`A${r}`).alignment = alignLeft;
+                    r++;
+
+                    ws.addRow(["분 류", "", "프로젝트명", "목 표", "비 고", "", ""]);
+                    ws.mergeCells(`A${r}:B${r}`); ws.mergeCells(`E${r}:G${r}`);
+                    ['A','C','D','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.fill = fillGray; c.font = fontBold; c.alignment = alignCenter; });
+                    r++;
+
+                    const todayStart = r;
+                    let amB = addRows("금일 업무 현황", "오 전", data.amProj||[], data.amCol1||[], data.amCol2||[]);
+                    ws.mergeCells(`B${amB.startR}:B${amB.endR}`);
+                    ws.getCell(`B${amB.startR}`).fill = fillGray; ws.getCell(`B${amB.startR}`).font = fontBold; ws.getCell(`B${amB.startR}`).alignment = alignCenter;
+
+                    let pmB = addRows("", "오 후", data.pmProj||[], data.pmCol1||[], data.pmCol2||[]);
+                    ws.mergeCells(`B${pmB.startR}:B${pmB.endR}`);
+                    ws.getCell(`B${pmB.startR}`).fill = fillGray; ws.getCell(`B${pmB.startR}`).font = fontBold; ws.getCell(`B${pmB.startR}`).alignment = alignCenter;
+
+                    ws.mergeCells(`A${todayStart}:A${pmB.endR}`);
+                    ws.getCell(`A${todayStart}`).fill = fillGray; ws.getCell(`A${todayStart}`).font = fontBold; ws.getCell(`A${todayStart}`).alignment = alignCenter;
+
+                    let nextB = addRows("익일 예정사항", "", data.nextProj||[], data.nextCol1||[], data.nextCol2||[]);
+                    ws.mergeCells(`A${nextB.startR}:B${nextB.endR}`);
+                    ws.getCell(`A${nextB.startR}`).fill = fillGray; ws.getCell(`A${nextB.startR}`).font = fontBold; ws.getCell(`A${nextB.startR}`).alignment = alignCenter;
+
+                    ws.addRow(["2. 특이 사항", "", "", "", "", "", ""]);
+                    ws.mergeCells(`A${r}:G${r}`);
+                    ws.getCell(`A${r}`).fill = fillBlue; ws.getCell(`A${r}`).font = fontBold; ws.getCell(`A${r}`).alignment = alignLeft;
+                    r++;
+
+                    ws.addRow(["내 용", "", "", "", "비 고", "", ""]);
+                    ws.mergeCells(`A${r}:D${r}`); ws.mergeCells(`E${r}:G${r}`);
+                    ['A','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.fill = fillGray; c.font = fontBold; c.alignment = alignCenter; });
+                    r++;
+
+                    ws.addRow([data.specialContent||"", "", "", "", data.specialNote||"", "", ""]);
+                    ws.getRow(r).height = 60; 
+                    ws.mergeCells(`A${r}:D${r}`); ws.mergeCells(`E${r}:G${r}`);
+                    ['A','E'].forEach(col => { const c = ws.getCell(`${col}${r}`); c.font = fontDefault; c.alignment = { vertical: 'top', horizontal: 'left', wrapText: true, indent: 1 }; });
+                    r++;
+
+                    for(let i=1; i<r; i++) {
+                        for(let j=1; j<=7; j++) {
+                            const cell = ws.getCell(i, j); cell.border = borderAll;
+                        }
+                    }
+                });
+
+                const filename = `업무일지_${year}년${month}월${currentManagerFilter !== '전체' ? '_'+currentManagerFilter : ''}.xlsx`;
+                workbook.xlsx.writeBuffer().then(buffer => {
+                    saveAs(new Blob([buffer]), filename);
+                });
+            } catch(error) {
+                console.error("엑셀 추출 중 오류:", error);
+                alert("엑셀 다운로드 중 오류가 발생했습니다.");
+            }
+        }
+    </script>
+</body>
+</html>
