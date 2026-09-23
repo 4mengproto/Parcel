@@ -3,11 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <title> </title>
-    <!-- Firebase SDK (v10 모듈러 방식 사용) -->
+    <!-- SheetJS (Excel 다운로드 및 파싱) -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+    <!-- Firebase SDK (v10 모듈러) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-app.js";
         import { 
-            getFirestore, collection, onSnapshot, setDoc, deleteDoc, doc 
+            getFirestore, collection, onSnapshot, setDoc, deleteDoc, doc, getDocs, writeBatch 
         } from "https://www.gstatic.com/firebasejs/10.9.0/firebase-firestore.js";
 
         // ========================================================
@@ -23,29 +26,108 @@
             appId: "1:341327751150:web:fd7f0c6bcac20ed823d0ff"
         };
 
+        // 기본 주소록 데이터
+        const defaultAddressBook = {
+            "포엠이엔지": "경기도 화성시 남양읍 주석로 175번길 49, 포엠이엔지",
+            "디와이덕양(안양)": "경기도 안양시 동안구 벌말로 126, (관양동) 오비즈타워 27층, 디와이덕양(안양)",
+            "한국자동차연구원": "충남 천안시 동남구 풍세면 풍세로 303, 한국자동차연구원",
+            "신영(본사)": "경상북도 영천시 본촌공단길 39, 신영(본사)",
+            "서진산업(군포연구소)": "경기도 군포시 엘에스로 169, 서진산업(군포연구소)"
+        };
+
+        // 기본 담당자 데이터
+        const defaultPhoneBook = {
+            "이원찬": "010-8449-9998",
+            "김종성": "010-3003-2237",
+            "최승락": "010-8006-7052",
+            "김정현": "010-7508-5547",
+            "손이수": "010-8748-1101",
+            "김보람": "010-7578-4088"
+        };
+
         // Firebase 초기화
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const addressCollection = collection(db, "addresses");
+        const contactCollection = collection(db, "contacts");
 
-        window.addressBook = {};
+        window.addressBook = { ...defaultAddressBook };
+        window.phoneBook = { ...defaultPhoneBook };
 
-        // Firestore 실시간 리스너 (DB 변경 시 자동 동기화)
-        onSnapshot(addressCollection, (snapshot) => {
-            window.addressBook = {};
-            snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                if (data.company && data.address) {
-                    window.addressBook[data.company] = data.address;
+        // 최초 DB 비어있을 시 초기 데이터 일괄 동기화
+        async function syncInitialDataIfEmpty() {
+            try {
+                // 1. 주소록 확인
+                const addrSnap = await getDocs(addressCollection);
+                if (addrSnap.empty) {
+                    for (const [company, address] of Object.entries(defaultAddressBook)) {
+                        await setDoc(doc(db, "addresses", company), {
+                            company: company,
+                            address: address,
+                            updatedAt: new Date()
+                        });
+                    }
                 }
-            });
+                // 2. 담당자 확인
+                const contactSnap = await getDocs(contactCollection);
+                if (contactSnap.empty) {
+                    for (const [name, phone] of Object.entries(defaultPhoneBook)) {
+                        await setDoc(doc(db, "contacts", name), {
+                            name: name,
+                            phone: phone,
+                            updatedAt: new Date()
+                        });
+                    }
+                }
+            } catch (err) {
+                console.error("초기 데이터 동기화 확인 오류:", err);
+            }
+        }
+        syncInitialDataIfEmpty();
+
+        // 1) Firestore 주소록 실시간 리스너
+        onSnapshot(addressCollection, (snapshot) => {
+            if (!snapshot.empty) {
+                window.addressBook = {};
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    if (data.company && data.address) {
+                        window.addressBook[data.company] = data.address;
+                    }
+                });
+            } else {
+                window.addressBook = { ...defaultAddressBook };
+            }
             window.updateAddressDatalist();
             window.renderAddressTable();
         }, (error) => {
-            console.error("Firestore 동기화 오류:", error);
+            console.error("Firestore 주소록 동기화 오류:", error);
+            window.updateAddressDatalist();
+            window.renderAddressTable();
         });
 
-        // 주소 등록/수정 함수
+        // 2) Firestore 담당자 실시간 리스너
+        onSnapshot(contactCollection, (snapshot) => {
+            if (!snapshot.empty) {
+                window.phoneBook = {};
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    if (data.name && data.phone) {
+                        window.phoneBook[data.name] = data.phone;
+                    }
+                });
+            } else {
+                window.phoneBook = { ...defaultPhoneBook };
+            }
+            window.updateContactDatalist();
+            window.renderContactTable();
+        }, (error) => {
+            console.error("Firestore 담당자 동기화 오류:", error);
+            window.updateContactDatalist();
+            window.renderContactTable();
+        });
+
+        /* ================= 주소록 DB 제어 ================= */
         window.saveAddressToFirebase = async function(company, address) {
             try {
                 await setDoc(doc(db, "addresses", company), {
@@ -59,13 +141,77 @@
             }
         };
 
-        // 주소 삭제 함수
         window.deleteAddressFromFirebase = async function(company) {
             try {
                 await deleteDoc(doc(db, "addresses", company));
             } catch (err) {
                 console.error("삭제 실패:", err);
                 alert("주소 삭제 중 오류가 발생했습니다: " + err.message);
+            }
+        };
+
+        window.batchUpdateAddressesFromExcel = async function(parsedList) {
+            try {
+                const batch = writeBatch(db);
+                parsedList.forEach(item => {
+                    if (item.company && item.address) {
+                        const docRef = doc(db, "addresses", item.company);
+                        batch.set(docRef, {
+                            company: item.company,
+                            address: item.address,
+                            updatedAt: new Date()
+                        });
+                    }
+                });
+                await batch.commit();
+                alert(`총 ${parsedList.length}건의 주소가 Firebase에 성공적으로 갱신되었습니다.`);
+            } catch (err) {
+                console.error("엑셀 일괄 갱신 실패:", err);
+                alert("엑셀 데이터 저장 중 오류가 발생했습니다: " + err.message);
+            }
+        };
+
+        /* ================= 담당자 DB 제어 ================= */
+        window.saveContactToFirebase = async function(name, phone) {
+            try {
+                await setDoc(doc(db, "contacts", name), {
+                    name: name,
+                    phone: phone,
+                    updatedAt: new Date()
+                });
+            } catch (err) {
+                console.error("담당자 저장 실패:", err);
+                alert("담당자 저장 중 오류가 발생했습니다: " + err.message);
+            }
+        };
+
+        window.deleteContactFromFirebase = async function(name) {
+            try {
+                await deleteDoc(doc(db, "contacts", name));
+            } catch (err) {
+                console.error("담당자 삭제 실패:", err);
+                alert("담당자 삭제 중 오류가 발생했습니다: " + err.message);
+            }
+        };
+
+        window.batchUpdateContactsFromExcel = async function(parsedList) {
+            try {
+                const batch = writeBatch(db);
+                parsedList.forEach(item => {
+                    if (item.name && item.phone) {
+                        const docRef = doc(db, "contacts", item.name);
+                        batch.set(docRef, {
+                            name: item.name,
+                            phone: item.phone,
+                            updatedAt: new Date()
+                        });
+                    }
+                });
+                await batch.commit();
+                alert(`총 ${parsedList.length}명의 담당자가 Firebase에 성공적으로 갱신되었습니다.`);
+            } catch (err) {
+                console.error("담당자 엑셀 갱신 실패:", err);
+                alert("담당자 엑셀 저장 중 오류: " + err.message);
             }
         };
     </script>
@@ -105,7 +251,7 @@
         }
 
         .btn {
-            padding: 9px 15px;
+            padding: 9px 14px;
             font-size: 13px;
             font-weight: bold;
             border: none;
@@ -118,6 +264,8 @@
         .btn-add:hover { background-color: #059669; }
         .btn-addr { background-color: #f59e0b; color: #fff; }
         .btn-addr:hover { background-color: #d97706; }
+        .btn-contact { background-color: #8b5cf6; color: #fff; }
+        .btn-contact:hover { background-color: #7c3aed; }
         .btn-print { background-color: #1a56db; color: #fff; box-shadow: 0 2px 4px rgba(26, 86, 219, 0.2); }
         .btn-print:hover { background-color: #1643aa; }
         .btn-reset { background-color: #e5e7eb; color: #374151; }
@@ -230,7 +378,7 @@
         }
 
         /* ------------------------------------------------
-           [2] 주소록 모달 창
+           [2] 모달 창 공통 스타일
            ------------------------------------------------ */
         .modal-overlay {
             display: none;
@@ -245,11 +393,11 @@
         .modal-content {
             background: #fff;
             width: 92%;
-            max-width: 620px;
+            max-width: 650px;
             border-radius: 8px;
             padding: 24px;
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-            max-height: 85vh;
+            max-height: 88vh;
             display: flex;
             flex-direction: column;
         }
@@ -258,7 +406,7 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
         }
 
         .modal-header h3 {
@@ -274,18 +422,49 @@
             color: #6b7280;
         }
 
-        .add-address-form {
+        .excel-actions-bar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .btn-excel {
+            background-color: #0284c7;
+            color: #fff;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-excel:hover { background-color: #0369a1; }
+
+        .btn-excel-upload {
+            background-color: #059669;
+            color: #fff;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-weight: bold;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-excel-upload:hover { background-color: #047857; }
+
+        .mgmt-input-form {
             display: grid;
             grid-template-columns: 140px 1fr 70px;
             gap: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 14px;
             background: #f9fafb;
             padding: 12px;
             border-radius: 6px;
             border: 1px solid #e5e7eb;
         }
 
-        .add-address-form input {
+        .mgmt-input-form input {
             border: 1px solid #d1d5db;
             background: #fff;
             padding: 7px 10px;
@@ -294,7 +473,7 @@
             outline: none;
         }
 
-        .add-address-form button {
+        .mgmt-input-form button {
             background: #10b981;
             color: #fff;
             border: none;
@@ -303,28 +482,28 @@
             font-weight: bold;
             cursor: pointer;
         }
-        .add-address-form button:hover { background: #059669; }
+        .mgmt-input-form button:hover { background: #059669; }
 
-        .address-table-wrapper {
+        .mgmt-table-wrapper {
             overflow-y: auto;
             flex: 1;
             border: 1px solid #e5e7eb;
             border-radius: 4px;
         }
 
-        .address-mgmt-table {
+        .mgmt-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 13px;
         }
 
-        .address-mgmt-table th, .address-mgmt-table td {
+        .mgmt-table th, .mgmt-table td {
             border: 1px solid #e5e7eb;
             padding: 8px 10px;
             text-align: left;
         }
 
-        .address-mgmt-table th {
+        .mgmt-table th {
             background-color: #f3f4f6;
             font-weight: 600;
             color: #374151;
@@ -490,7 +669,8 @@
 <div class="btn-toolbar">
     <div class="toolbar-left">
         <button type="button" class="btn btn-add" onclick="addInvoice()">➕ 발송장 추가</button>
-        <button type="button" class="btn btn-addr" onclick="openAddressModal()">🔥 주소록 관리 (Firebase)</button>
+        <button type="button" class="btn btn-addr" onclick="openAddressModal()">🔥 주소록 관리</button>
+        <button type="button" class="btn btn-contact" onclick="openContactModal()">👤 담당자 관리</button>
     </div>
     <div class="toolbar-right">
         <button type="button" class="btn btn-reset" onclick="resetAll()">↺ 전체 초기화</button>
@@ -500,27 +680,31 @@
 
 <div id="invoiceList"></div>
 
-<!-- Firebase 주소록 관리 모달 -->
-<div class="modal-overlay" id="addressModal" onclick="closeModalOnBackdrop(event)">
+<!-- 1. Firebase 주소록 관리 모달 -->
+<div class="modal-overlay" id="addressModal" onclick="closeModalOnBackdrop(event, 'addressModal')">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>🔥 주소록 관리 (Cloud Firestore 동기화)</h3>
+            <h3>🔥 주소록 관리 (Cloud Firestore)</h3>
             <button class="modal-close-btn" onclick="closeAddressModal()">&times;</button>
         </div>
+
+        <div class="excel-actions-bar">
+            <button type="button" class="btn-excel" onclick="downloadAddressExcel()">📥 주소록 다운로드 (.xlsx)</button>
+            <button type="button" class="btn-excel-upload" onclick="triggerAddressFileInput()">📤 엑셀 업로드</button>
+            <input type="file" id="addressFileInput" accept=".xlsx, .xls" style="display: none;" onchange="handleAddressFileUpload(event)">
+        </div>
         
-        <!-- 신규 추가 폼 -->
-        <div class="add-address-form">
-            <input type="text" id="newCompany" placeholder="업체명 (예: 디와이덕양)">
+        <div class="mgmt-input-form">
+            <input type="text" id="newCompany" placeholder="업체명 (예: 신영(본사))">
             <input type="text" id="newAddress" placeholder="주소 입력 (업체명 제외 가능)">
             <button type="button" onclick="handleNewAddressSubmit()">등록</button>
         </div>
 
-        <!-- 주소 목록 테이블 -->
-        <div class="address-table-wrapper">
-            <table class="address-mgmt-table">
+        <div class="mgmt-table-wrapper">
+            <table class="mgmt-table">
                 <thead>
                     <tr>
-                        <th style="width: 140px;">업체명</th>
+                        <th style="width: 150px;">업체명</th>
                         <th>표시 형식 ("주소", "업체명")</th>
                         <th style="width: 60px; text-align: center;">관리</th>
                     </tr>
@@ -533,34 +717,56 @@
     </div>
 </div>
 
-<!-- 연락처 자동완성 추천 목록 -->
-<datalist id="contactList">
-    <option value="이원찬">
-    <option value="김종성">
-    <option value="최승락">
-    <option value="김정현">
-    <option value="손이수">
-    <option value="김보람">
-</datalist>
+<!-- 2. Firebase 담당자 관리 모달 -->
+<div class="modal-overlay" id="contactModal" onclick="closeModalOnBackdrop(event, 'contactModal')">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>👤 담당자 관리 (Cloud Firestore)</h3>
+            <button class="modal-close-btn" onclick="closeContactModal()">&times;</button>
+        </div>
 
-<!-- Firebase와 실시간 동기화되는 주소 목록 -->
+        <div class="excel-actions-bar">
+            <button type="button" class="btn-excel" onclick="downloadContactExcel()">📥 담당자 다운로드 (.xlsx)</button>
+            <button type="button" class="btn-excel-upload" onclick="triggerContactFileInput()">📤 엑셀 업로드</button>
+            <input type="file" id="contactFileInput" accept=".xlsx, .xls" style="display: none;" onchange="handleContactFileUpload(event)">
+        </div>
+        
+        <div class="mgmt-input-form">
+            <input type="text" id="newContactName" placeholder="담당자 이름 (예: 홍길동)">
+            <input type="text" id="newContactPhone" placeholder="연락처 (예: 010-1234-5678)">
+            <button type="button" onclick="handleNewContactSubmit()">등록</button>
+        </div>
+
+        <div class="mgmt-table-wrapper">
+            <table class="mgmt-table">
+                <thead>
+                    <tr>
+                        <th style="width: 140px;">이름</th>
+                        <th>연락처</th>
+                        <th style="width: 60px; text-align: center;">관리</th>
+                    </tr>
+                </thead>
+                <tbody id="contactTableBody">
+                    <tr><td colspan="3" style="text-align: center; color: #888; padding: 15px;">담당자 목록을 불러오는 중...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 연락처 자동완성 추천 목록 -->
+<datalist id="contactList"></datalist>
+
+<!-- 주소 자동완성 추천 목록 -->
 <datalist id="addressList"></datalist>
 
 <script>
-    const phoneBook = {
-        "이원찬": "010-8449-9998",
-        "김종성": "010-3003-2237",
-        "최승락": "010-8006-7052",
-        "김정현": "010-7508-5547",
-        "손이수": "010-8748-1101",
-        "김보람": "010-7578-4088"
-    };
-
-    // "주소, 업체명" 형태로 정규화하여 반환하는 헬퍼 함수
+    /* ========================================================
+       1. 헬퍼 및 UI 렌더링 함수
+       ======================================================== */
     function formatAddressWithCompany(address, company) {
         if (!address) return company || "";
-        let cleanAddr = address.trim();
-        // 이미 끝에 업체명이 포함되어 있다면 중복 제거 후 콤마로 연결
+        let cleanAddr = String(address).trim();
         if (cleanAddr.endsWith(company)) {
             cleanAddr = cleanAddr.slice(0, -company.length).trim();
             cleanAddr = cleanAddr.replace(/,$/, '').trim();
@@ -568,9 +774,20 @@
         return `${cleanAddr}, ${company}`;
     }
 
-    // datalist 자동완성 갱신
+    function extractPureAddress(fullAddress, company) {
+        if (!fullAddress) return "";
+        let cleanAddr = String(fullAddress).trim();
+        if (cleanAddr.endsWith(company)) {
+            cleanAddr = cleanAddr.slice(0, -company.length).trim();
+            cleanAddr = cleanAddr.replace(/,$/, '').trim();
+        }
+        return cleanAddr;
+    }
+
+    // 주소 Datalist 갱신
     window.updateAddressDatalist = function() {
         const dl = document.getElementById("addressList");
+        if (!dl) return;
         dl.innerHTML = "";
         const book = window.addressBook || {};
         for (const company of Object.keys(book)) {
@@ -580,7 +797,20 @@
         }
     };
 
-    // 모달 테이블 UI 갱신
+    // 담당자 Datalist 갱신
+    window.updateContactDatalist = function() {
+        const dl = document.getElementById("contactList");
+        if (!dl) return;
+        dl.innerHTML = "";
+        const book = window.phoneBook || {};
+        for (const name of Object.keys(book)) {
+            const opt = document.createElement("option");
+            opt.value = name;
+            dl.appendChild(opt);
+        }
+    };
+
+    // 주소 관리 테이블 렌더링
     window.renderAddressTable = function() {
         const tbody = document.getElementById("addressTableBody");
         if (!tbody) return;
@@ -607,47 +837,75 @@
         });
     };
 
-    /* 모달 창 제어 */
+    // 담당자 관리 테이블 렌더링
+    window.renderContactTable = function() {
+        const tbody = document.getElementById("contactTableBody");
+        if (!tbody) return;
+        tbody.innerHTML = "";
+
+        const book = window.phoneBook || {};
+        const entries = Object.entries(book);
+        if (entries.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: #888; padding: 15px;">등록된 담당자가 없습니다.</td></tr>`;
+            return;
+        }
+
+        entries.forEach(([name, phone]) => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td style="font-weight: bold;">${name}</td>
+                <td>${phone}</td>
+                <td style="text-align: center;">
+                    <button type="button" class="btn-del-sm" onclick="handleContactDelete('${name}')">삭제</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    };
+
+    /* ========================================================
+       2. 모달 제어 함수
+       ======================================================== */
     function openAddressModal() {
         window.renderAddressTable();
         document.getElementById("addressModal").style.display = "flex";
     }
-
     function closeAddressModal() {
         document.getElementById("addressModal").style.display = "none";
     }
 
-    function closeModalOnBackdrop(e) {
-        if (e.target.id === "addressModal") closeAddressModal();
+    function openContactModal() {
+        window.renderContactTable();
+        document.getElementById("contactModal").style.display = "flex";
+    }
+    function closeContactModal() {
+        document.getElementById("contactModal").style.display = "none";
     }
 
+    function closeModalOnBackdrop(e, modalId) {
+        if (e.target.id === modalId) {
+            document.getElementById(modalId).style.display = "none";
+        }
+    }
+
+    /* ========================================================
+       3. 주소록 CRUD 및 엑셀 연동
+       ======================================================== */
     async function handleNewAddressSubmit() {
         const companyInput = document.getElementById("newCompany");
         const addrInput = document.getElementById("newAddress");
         const company = companyInput.value.trim();
         const address = addrInput.value.trim();
 
-        if (!company) {
-            alert("업체명을 입력해주세요.");
-            companyInput.focus();
-            return;
-        }
-        if (!address) {
-            alert("주소를 입력해주세요.");
-            addrInput.focus();
-            return;
-        }
+        if (!company) { alert("업체명을 입력해주세요."); companyInput.focus(); return; }
+        if (!address) { alert("주소를 입력해주세요."); addrInput.focus(); return; }
 
-        // 항상 "주소, 업체명" 형식으로 보정하여 저장
         const formattedAddress = formatAddressWithCompany(address, company);
-
         if (typeof window.saveAddressToFirebase === 'function') {
             await window.saveAddressToFirebase(company, formattedAddress);
             companyInput.value = "";
             addrInput.value = "";
             companyInput.focus();
-        } else {
-            alert("Firebase가 아직 초기화되지 않았거나 설정을 확인해야 합니다.");
         }
     }
 
@@ -659,7 +917,186 @@
         }
     }
 
-    /* 주소 자동완성 핸들러 ("주소", "업체명" 형식으로 완성) */
+    function downloadAddressExcel() {
+        const book = window.addressBook || {};
+        const entries = Object.entries(book);
+        if (entries.length === 0) { alert("다운로드할 주소록이 없습니다."); return; }
+
+        const excelData = entries.map(([company, fullAddress], idx) => ({
+            "순번": idx + 1,
+            "회사명": company,
+            "주소": extractPureAddress(fullAddress, company)
+        }));
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        ws["!cols"] = [{ wch: 8 }, { wch: 22 }, { wch: 60 }];
+        XLSX.utils.book_append_sheet(wb, ws, "택배 송장 주소록");
+        XLSX.writeFile(wb, "택배 송장 주소록.xlsx");
+    }
+
+    function triggerAddressFileInput() { document.getElementById("addressFileInput").click(); }
+
+    function handleAddressFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: "array" });
+                const sheetName = workbook.SheetNames.includes("택배 송장 주소록") ? "택배 송장 주소록" : workbook.SheetNames[0];
+                const rawJson = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+
+                let colCompanyIdx = -1, colAddressIdx = -1, headerRowIdx = 0;
+                for (let r = 0; r < Math.min(rawJson.length, 5); r++) {
+                    const row = rawJson[r];
+                    if (!Array.isArray(row)) continue;
+                    row.forEach((cell, cIdx) => {
+                        const cellStr = String(cell || "").trim();
+                        if (cellStr.includes("회사명") || cellStr.includes("업체명")) colCompanyIdx = cIdx;
+                        if (cellStr.includes("주소")) colAddressIdx = cIdx;
+                    });
+                    if (colCompanyIdx !== -1 && colAddressIdx !== -1) { headerRowIdx = r; break; }
+                }
+                if (colCompanyIdx === -1 || colAddressIdx === -1) { colCompanyIdx = 1; colAddressIdx = 2; }
+
+                const parsedList = [];
+                for (let r = headerRowIdx + 1; r < rawJson.length; r++) {
+                    const row = rawJson[r];
+                    if (!row) continue;
+                    const company = String(row[colCompanyIdx] || "").trim();
+                    const rawAddress = String(row[colAddressIdx] || "").trim();
+                    if (company && rawAddress) {
+                        parsedList.push({ company: company, address: formatAddressWithCompany(rawAddress, company) });
+                    }
+                }
+                if (parsedList.length === 0) { alert("유효한 주소 데이터를 찾지 못했습니다."); return; }
+
+                if (confirm(`${parsedList.length}건의 주소를 확인했습니다. Firebase에 동기화하시겠습니까?`)) {
+                    await window.batchUpdateAddressesFromExcel(parsedList);
+                }
+            } catch (err) {
+                alert("엑셀 처리 오류: " + err.message);
+            } finally {
+                event.target.value = "";
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    /* ========================================================
+       4. 담당자 CRUD 및 엑셀 연동
+       ======================================================== */
+    async function handleNewContactSubmit() {
+        const nameInput = document.getElementById("newContactName");
+        const phoneInput = document.getElementById("newContactPhone");
+        const name = nameInput.value.trim();
+        const phone = phoneInput.value.trim();
+
+        if (!name) { alert("담당자 이름을 입력해주세요."); nameInput.focus(); return; }
+        if (!phone) { alert("연락처를 입력해주세요."); phoneInput.focus(); return; }
+
+        if (typeof window.saveContactToFirebase === 'function') {
+            await window.saveContactToFirebase(name, phone);
+            nameInput.value = "";
+            phoneInput.value = "";
+            nameInput.focus();
+        }
+    }
+
+    async function handleContactDelete(name) {
+        if (confirm(`'${name}' 담당자를 클라우드에서 삭제하시겠습니까?`)) {
+            if (typeof window.deleteContactFromFirebase === 'function') {
+                await window.deleteContactFromFirebase(name);
+            }
+        }
+    }
+
+    function downloadContactExcel() {
+        const book = window.phoneBook || {};
+        const entries = Object.entries(book);
+        if (entries.length === 0) { alert("다운로드할 담당자 데이터가 없습니다."); return; }
+
+        const excelData = entries.map(([name, phone], idx) => ({
+            "순번": idx + 1,
+            "이름": name,
+            "연락처": phone
+        }));
+
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        ws["!cols"] = [{ wch: 8 }, { wch: 18 }, { wch: 25 }];
+        // 워크시트명: "택배 송장 담당자 목록"
+        XLSX.utils.book_append_sheet(wb, ws, "택배 송장 담당자 목록");
+        XLSX.writeFile(wb, "택배 송장 담당자 목록.xlsx");
+    }
+
+    function triggerContactFileInput() { document.getElementById("contactFileInput").click(); }
+
+    function handleContactFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: "array" });
+                const sheetName = workbook.SheetNames.includes("택배 송장 담당자 목록") ? "택배 송장 담당자 목록" : workbook.SheetNames[0];
+                const rawJson = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+
+                let colNameIdx = -1, colPhoneIdx = -1, headerRowIdx = 0;
+                for (let r = 0; r < Math.min(rawJson.length, 5); r++) {
+                    const row = rawJson[r];
+                    if (!Array.isArray(row)) continue;
+                    row.forEach((cell, cIdx) => {
+                        const cellStr = String(cell || "").trim();
+                        if (cellStr.includes("이름") || cellStr.includes("성명") || cellStr.includes("담당자")) colNameIdx = cIdx;
+                        if (cellStr.includes("연락처") || cellStr.includes("전화번호") || cellStr.includes("전화 번호")) colPhoneIdx = cIdx;
+                    });
+                    if (colNameIdx !== -1 && colPhoneIdx !== -1) { headerRowIdx = r; break; }
+                }
+                if (colNameIdx === -1 || colPhoneIdx === -1) { colNameIdx = 1; colPhoneIdx = 2; }
+
+                const parsedList = [];
+                for (let r = headerRowIdx + 1; r < rawJson.length; r++) {
+                    const row = rawJson[r];
+                    if (!row) continue;
+                    const name = String(row[colNameIdx] || "").trim();
+                    const phone = String(row[colPhoneIdx] || "").trim();
+                    if (name && phone) {
+                        parsedList.push({ name: name, phone: phone });
+                    }
+                }
+                if (parsedList.length === 0) { alert("유효한 담당자 데이터를 찾지 못했습니다."); return; }
+
+                if (confirm(`${parsedList.length}명의 담당자 데이터를 확인했습니다. Firebase에 동기화하시겠습니까?`)) {
+                    await window.batchUpdateContactsFromExcel(parsedList);
+                }
+            } catch (err) {
+                alert("담당자 엑셀 처리 오류: " + err.message);
+            } finally {
+                event.target.value = "";
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    /* ========================================================
+       5. 발송장 DOM 생성 및 입력 이벤트 처리
+       ======================================================== */
+    function handleNameInput(nameInput, targetField) {
+        const card = nameInput.closest(".invoice-card");
+        const phoneInput = card.querySelector(`input[data-field="${targetField}"]`);
+        const val = nameInput.value.trim();
+        const book = window.phoneBook || {};
+        if (book[val] && phoneInput) {
+            phoneInput.value = book[val];
+        }
+    }
+
     function handleAddressInput(addrInput) {
         const val = addrInput.value.trim();
         const book = window.addressBook || {};
@@ -668,7 +1105,6 @@
         }
     }
 
-    /* 송장 DOM 제어 */
     function createInvoiceHTML(index) {
         return `
         <div class="invoice-card" id="invoiceCard_${index}">
@@ -783,15 +1219,6 @@
                 indexLabel.textContent = `📄 발송장 #${idx + 1}`;
             }
         });
-    }
-
-    function handleNameInput(nameInput, targetField) {
-        const card = nameInput.closest(".invoice-card");
-        const phoneInput = card.querySelector(`input[data-field="${targetField}"]`);
-        const val = nameInput.value.trim();
-        if (phoneBook[val] && phoneInput) {
-            phoneInput.value = phoneBook[val];
-        }
     }
 
     function resetAll() {
